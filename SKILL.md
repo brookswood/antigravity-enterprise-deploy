@@ -51,9 +51,9 @@ Produces turnkey configurations, native Red Hat RPM packages (`dnf` / `rpmbuild`
      - **Okta + WIF Pattern B:** Zero-paste `wif-okta-login-config.json` + `gcloud auth application-default login` + `AGY_ADC_AUTH="true"` / `enableAdc: true`
    - **Optional root policy lock (`admin_settings.json`):** Needed (`INCLUDE_ADMIN_SETTINGS=1`) vs. omitted (`INCLUDE_ADMIN_SETTINGS=0`, default).
 
-2. **Load Only the Required Reference Module(s):**
-   - **Native Red Hat RPM Packaging, Spec, Wrapper & TLS/Proxy Setup:** Read [RHEL RPM Packaging Guide](references/rhel-rpm-packaging.md) and reuse the turnkey build assets in [`scripts/build-rpm.sh`](scripts/build-rpm.sh), [`assets/google-antigravity-config.spec`](assets/google-antigravity-config.spec), and [`assets/configs/`](assets/configs/).
-   - **Okta (OIDC or SAML 2.0) + Workforce Identity Federation & IAM Setup:** Read [Okta & WIF Authentication Guide](references/okta-wif-authentication.md) for exact JSON snippets, `gcloud iam workforce-pools` commands, IAM `principalSet` bindings, and firewall allowlists.
+2. **Load Only the Required Reference Module(s) & Bundled Templates:**
+   - **Native Red Hat RPM Packaging, Spec, Wrapper & TLS/Proxy Setup:** Read the [RHEL RPM packaging guide](references/rhel-rpm-packaging.md) and reuse the [RPM build script](scripts/build-rpm.sh), [RPM spec template](assets/google-antigravity-config.spec), [CLI settings template](assets/configs/agy-cli-settings.json), and optional [admin policy template](assets/configs/admin_settings.json).
+   - **Okta (OIDC or SAML 2.0) + Workforce Identity Federation & IAM Setup:** Read the [Okta and WIF authentication guide](references/okta-wif-authentication.md) alongside the optional Pattern B [Okta WIF login config example](assets/configs/wif-okta-login-config.example.json) and [desktop ADC config template](assets/configs/user_app_config.json).
 
 3. **Verify Output Before Delivery:**
    - Validate all generated JSON files with `python3 -m json.tool <file.json>`.

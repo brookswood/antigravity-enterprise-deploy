@@ -4,7 +4,7 @@ Use this reference when building or customizing a native Red Hat Enterprise Linu
 
 ## 1. Packaging Architecture & Build Flags
 
-The bundled packager ([`../scripts/build-rpm.sh`](../scripts/build-rpm.sh) and [`../assets/google-antigravity-config.spec`](../assets/google-antigravity-config.spec)) supports three independent build flags:
+The bundled packager (`scripts/build-rpm.sh` and `assets/google-antigravity-config.spec`) supports three independent build flags:
 
 - `BUNDLE_AGY_BINARY=1` *(default)*: Downloads the official `linux_amd64` or `linux_arm64` Antigravity CLI release manifest from `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/linux_<arch>.json`, verifies its `sha512sum`, stages `/opt/google/antigravity-cli/agy-bin`, and installs `/usr/bin/agy` (`AGY_CLI_DISABLE_AUTO_UPDATE="true"`). Set `BUNDLE_AGY_BINARY=0` to build a config-only `noarch` RPM.
 - `INCLUDE_ADMIN_SETTINGS=0` *(default — no MDM / no `/etc/antigravity/admin_settings.json`)*: Emits only the base `google-antigravity-config` RPM. Set `INCLUDE_ADMIN_SETTINGS=1` to also emit an optional `google-antigravity-admin-policy` `noarch` subpackage installing `/etc/antigravity/admin_settings.json` (`0644`, `root:root`).
@@ -67,7 +67,7 @@ sudo update-ca-trust
 
 ## 4. Building, Signing & Rolling Out via `dnf`
 
-Copy [`../scripts/build-rpm.sh`](../scripts/build-rpm.sh), [`../assets/google-antigravity-config.spec`](../assets/google-antigravity-config.spec), and [`../assets/configs/`](../assets/configs/) into a working build directory, edit `configs/agy-cli-settings.json` with your target Google Cloud project ID, and run:
+Copy `scripts/build-rpm.sh`, `assets/google-antigravity-config.spec`, and `assets/configs/` into a working build directory, edit `configs/agy-cli-settings.json` with your target Google Cloud project ID, and run:
 
 ```bash
 # Default build: agy binary + ~/.gemini/antigravity-cli/settings.json (no admin_settings.json)
