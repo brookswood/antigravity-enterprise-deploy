@@ -1,0 +1,16 @@
+{
+  "caCertPath": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "agentControls": {
+    "permissionPreset": "default"
+  },
+  "browserControls": {
+    "browserEnabled": true,
+    "javascriptExecutionPolicy": "request_review"
+  },
+  "mcpControls": {
+    "mcpEnabled": true
+  },
+  "featureControls": {
+    "remoteControlEnabled": false
+  }
+}

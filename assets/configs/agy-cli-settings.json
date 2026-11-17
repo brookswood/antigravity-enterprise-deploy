@@ -1,0 +1,16 @@
+{
+  "gcp": {
+    "project": "example-gcp-project",
+    "location": "global"
+  },
+  "colorScheme": "terminal",
+  "toolPermission": "request_review",
+  "artifactReviewPolicy": "asks_for_review",
+  "allowNonWorkspaceAccess": false,
+  "enableTerminalSandbox": true,
+  "showFeedbackSurvey": false,
+  "permissions": {
+    "allow": [],
+    "deny": []
+  }
+}
