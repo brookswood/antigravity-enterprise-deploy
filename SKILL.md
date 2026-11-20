@@ -1,70 +1,84 @@
 ---
 name: antigravity-enterprise-deploy
 description: >-
-  Generates enterprise Linux deployment configurations, native Red Hat RPM
-  packages (dnf/rpmbuild), and Okta Workforce Identity Federation (WIF)
-  authentication setups for Google Antigravity (agy). Use when packaging or
-  deploying Google Antigravity (agy) on RHEL, Rocky Linux, AlmaLinux, or
-  Fedora, configuring ~/.gemini/antigravity-cli/settings.json,
-  ~/.gemini/config/config.json, or optional /etc/antigravity/admin_settings.json,
-  or integrating Okta (OIDC or SAML 2.0) with Google Cloud Workforce Identity
-  Federation (WIF) and Application Default Credentials (ADC). Don't use for
-  consumer personal Gmail onboarding, Compute Engine VM capacity reservations,
-  or unrelated developer CLIs.
+  Generates portable enterprise Linux installer .zip bundles (default, bundling
+  the agy binary, JSON settings files, and install.sh) or optional OS packages
+  (Red Hat RPM via dnf/rpmbuild), plus Workforce Identity Federation (WIF)
+  authentication setups with Ping Identity (PingFederate, PingOne) or Okta
+  (OIDC and SAML 2.0) for Google Antigravity (agy). Use when packaging or
+  deploying Google Antigravity (agy) as a standalone zip installer or optional
+  RHEL/Rocky/AlmaLinux/Fedora RPM, configuring
+  ~/.gemini/antigravity-cli/settings.json, ~/.gemini/config/config.json, or
+  optional /etc/antigravity/admin_settings.json, or integrating Ping Identity
+  or Okta with Google Cloud WIF and Application Default Credentials (ADC).
+  Don't use for consumer personal Gmail onboarding, Compute Engine VM capacity
+  reservations, or unrelated developer CLIs.
 ---
 
-# Google Antigravity (`agy`) Enterprise Linux, RPM & Okta WIF Deployment
+# Google Antigravity (`agy`) Enterprise Bundle, WIF (Ping & Okta) & Optional Package Deployment
 
-Produces turnkey configurations, native Red Hat RPM packages (`dnf` / `rpmbuild`), and Okta Workforce Identity Federation (WIF) authentication setups for **Google Antigravity (`agy`)** CLI and Desktop/IDE surfaces.
+Produces **portable `.zip` installer bundles by default** (containing the SHA-512 verified `agy` binary, generated `.json` config files, and a standalone `install.sh` bash script — no OS package manager or MDM required), **Workforce Identity Federation (WIF)** configurations for **Ping Identity (`PingFederate` / `PingOne`) and Okta**, and **optional** native Red Hat `.rpm` packages (`dnf` / `rpmbuild`).
+
+## Default vs. Optional Packaging Modes
+
+- **Default Mode — Portable `.zip` Installer Bundle (`scripts/build-bundle.sh`):**
+  Exports a single `dist/antigravity-enterprise-bundle-linux-<arch>.zip` containing `bin/agy-bin` (SHA-512 verified), `configs/settings.json` (plus optional WIF/ADC or `admin_settings.json` files), and `install.sh` (supports zero-`sudo` user install `./install.sh` into `~/.local/bin/agy` + `~/.gemini/`, or `sudo ./install.sh --system` into `/opt/google/antigravity-cli` + `/usr/bin/agy` + `/etc/profile.d/`).
+- **Optional Mode — Native Red Hat `.rpm` Package (`scripts/build-rpm.sh`):**
+  Use **only** when the user explicitly requests a `.rpm` package for `dnf` / `yum` / Red Hat Satellite.
 
 ## Critical Gotchas (Prevent Silent Misconfigurations)
 
 1. **Exact `agy` User Settings Path (`~/.gemini/antigravity-cli/settings.json`):**
    `agy` reads its per-user CLI configuration from `~/.gemini/antigravity-cli/settings.json` (`0600`), **not** bare `~/.gemini/settings.json`. Writing to `~/.gemini/settings.json` has no effect on `agy`.
-2. **No `wifProvider` Key in `settings.json` or `admin_settings.json`:**
-   Neither `~/.gemini/antigravity-cli/settings.json` nor `/etc/antigravity/admin_settings.json` defines `wifProvider` or `oktaIssuer` (`/etc/antigravity/admin_settings.json` enforces `additionalProperties: false` and rejects unknown keys; `settings.json` ignores unknown keys). Configure Okta + WIF using **Pattern A** (4-line `gcp` block in `settings.json` + native `agy` WIF browser sign-in) or **Pattern B** (`/etc/antigravity/wif-okta-login-config.json` + `AGY_ADC_AUTH="true"` / `enableAdc: true`).
+2. **Workstation JSON Is Identical for Ping Identity and Okta — and Has No `wifProvider` Key:**
+   Neither `~/.gemini/antigravity-cli/settings.json` nor `/etc/antigravity/admin_settings.json` defines `wifProvider`, `pingIssuer`, or `oktaIssuer` (`/etc/antigravity/admin_settings.json` enforces `additionalProperties: false` and rejects unknown keys; `settings.json` ignores unknown keys). Both **Ping Identity** and **Okta** use the exact same two workstation JSON patterns:
+   - **Pattern A (Recommended — Native `agy` Browser WIF):** Seed only the 4-line `gcp` (`project`, `location`) block in `~/.gemini/antigravity-cli/settings.json`; users enter `locations/global/workforcePools/{pool_id}/providers/{provider_id}` once on first sign-in (zero `gcloud` CLI required).
+   - **Pattern B (Zero-Paste `wif-login-config.json` + ADC):** Bundle the 9-line non-secret `wif-login-config.json` generated by `gcloud iam workforce-pools create-login-config` alongside `AGY_ADC_AUTH="true"` (and 3-line `enableAdc: true` in `~/.gemini/config/config.json` for Desktop/IDE).
 3. **`AGY_CLI_DISABLE_AUTO_UPDATE` Requires Literal Lowercase `"true"`:**
-   When `agy` is installed as `root` via `dnf` / `rpm` under `/opt/google/antigravity-cli/` or `/usr/bin/agy`, standard users cannot overwrite the binary. Export `AGY_CLI_DISABLE_AUTO_UPDATE="true"` (literal lowercase `"true"` — setting `"1"` does **not** disable self-update checks).
-4. **Third-Party MDM & `/etc/antigravity/admin_settings.json` Are Optional on Linux:**
-   Antigravity does not query an MDM daemon on Linux — it simply checks whether `/etc/antigravity/admin_settings.json` exists as `root:root` (`0644`). Native `dnf` / `rpm` satisfies that ownership directly, and you should omit `admin_settings.json` (`INCLUDE_ADMIN_SETTINGS=0`) unless you need hard root-locked ceilings (`agentControls`, `browserControls`, `mcpControls`, `featureControls`), JetBrains/Zed file policy, or an Enterprise Gateway (`gateway.enabled: true`, used only when routing through a custom proxy without Gemini Enterprise seats).
-5. **Seed User Configs in Both `/etc/profile.d/` and `/usr/bin/agy`:**
-   Enterprise RPM installs run as `root` before LDAP/SSSD user home directories exist, and non-interactive SSH sessions (`ssh host agy ...`) skip `/etc/profile.d/*.sh`. Idempotently seed `0600` user configs in both `/etc/profile.d/` and the `/usr/bin/agy` wrapper without overwriting existing user customizations (`[ ! -f ... ]`).
+   Whenever `agy` is managed via a pre-packaged `.zip` wrapper or root-owned `/opt` / `/usr/bin` install, export `AGY_CLI_DISABLE_AUTO_UPDATE="true"` (literal lowercase `"true"` — setting `"1"` does **not** disable background self-update checks).
+4. **MDM & `/etc/antigravity/admin_settings.json` Are Strictly Optional:**
+   Omit `admin_settings.json` (`INCLUDE_ADMIN_SETTINGS=0`, default) unless the deployment specifically requires non-overridable root locks (`0644`, `root:root`) on `agentControls`, `browserControls`, `mcpControls`, `featureControls`, JetBrains/Zed file policy, or a custom Enterprise Gateway (`gateway.enabled: true` — used only when routing through a custom proxy without Gemini Enterprise seats).
+5. **Seed User Configs Inside the `agy` Wrapper as Well as Login Profiles:**
+   Non-interactive SSH commands (`ssh host agy ...`) skip `/etc/profile.d/*.sh` and `~/.bashrc`. Both `scripts/build-bundle.sh` and `scripts/build-rpm.sh` wrap `agy` so `~/.gemini/antigravity-cli/settings.json` (`0600`) is idempotently seeded immediately before `exec` (`[ ! -f ... ]`).
 
 ## Configuration File Precedence & Schema Map
 
-| Linux File Path | Scope & Mode | Surface Coverage | Valid Keys & Purpose |
+| Linux File Path | Included By Default? | Surface Coverage | Valid Keys & Purpose |
 | :--- | :--- | :--- | :--- |
-| `~/.gemini/antigravity-cli/settings.json` | User (`0600`) — **Default** | `agy` CLI | `gcp` (`project`, `location`), `toolPermission`, `artifactReviewPolicy`, `permissions` (`allow`, `deny`), `trustedWorkspaces`, `allowNonWorkspaceAccess`, `enableTerminalSandbox`, `sandboxProxy`, `showFeedbackSurvey`, `colorScheme` |
-| `~/.gemini/config/config.json` | User (`0600`) — **Optional** | Antigravity App & IDE | `{"userSettings": {"enableAdc": true}}` when authenticating via Google Cloud Application Default Credentials (ADC); `agy` CLI uses `AGY_ADC_AUTH="true"` |
-| `/etc/antigravity/wif-okta-login-config.json` | System (`0644`) — **Optional (Pattern B)** | `gcloud` ADC → `agy` | Non-secret WIF login config generated by `gcloud iam workforce-pools create-login-config`; paired with `CLOUDSDK_AUTH_LOGIN_CONFIG_FILE` and `AGY_ADC_AUTH="true"` |
-| `~/.antigravity/settings.json` | User (`0600`) — **Optional (Tier 3)** | App & `agy` CLI *(not JetBrains/Zed)* | Developer-local fallback for `caCertPath`, `proxy`, `gateway`, and `models` when `/etc/antigravity/admin_settings.json` is absent |
-| `/etc/antigravity/admin_settings.json` | Root (`0644`, `root:root`) — **Optional (Tier 1)** | All Antigravity surfaces (`agy`, App, VS Code, JetBrains, Zed) | Highest-precedence override for `caCertPath`, `proxy`, `gateway`, `models`, plus **root-only** `agentControls`, `browserControls`, `mcpControls`, and `featureControls` |
+| `~/.gemini/antigravity-cli/settings.json` | **Yes (Default `.zip` & RPM)** (`0600`) | `agy` CLI | `gcp` (`project`, `location`), `toolPermission`, `artifactReviewPolicy`, `permissions` (`allow`, `deny`), `trustedWorkspaces`, `allowNonWorkspaceAccess`, `enableTerminalSandbox`, `sandboxProxy`, `showFeedbackSurvey`, `colorScheme` |
+| `~/.gemini/config/config.json` | **Optional (`INCLUDE_WIF_ADC=1`)** (`0600`) | Antigravity App & IDE | `{"userSettings": {"enableAdc": true}}` when authenticating via Google Cloud Application Default Credentials (ADC); `agy` CLI uses `AGY_ADC_AUTH="true"` |
+| `wif-login-config.json` (`~/.config/antigravity/` or `/etc/antigravity/`) | **Optional (`INCLUDE_WIF_ADC=1`)** | `gcloud` ADC → `agy` | Non-secret Ping or Okta WIF login config from `gcloud iam workforce-pools create-login-config`; paired with `CLOUDSDK_AUTH_LOGIN_CONFIG_FILE` and `AGY_ADC_AUTH="true"` |
+| `~/.antigravity/settings.json` | **Optional (Tier 3)** (`0600`) | App & `agy` CLI *(not JetBrains/Zed)* | Developer-local fallback for `caCertPath`, `proxy`, `gateway`, and `models` when `/etc/antigravity/admin_settings.json` is absent |
+| `/etc/antigravity/admin_settings.json` | **Optional (`INCLUDE_ADMIN_SETTINGS=1`)** (`0644`, `root:root`) | All Antigravity surfaces (`agy`, App, VS Code, JetBrains, Zed) | Highest-precedence override for `caCertPath`, `proxy`, `gateway`, `models`, plus **root-only** `agentControls`, `browserControls`, `mcpControls`, and `featureControls` |
 
 ## Workflow Router
 
-1. **Gather Target Environment Placeholders:**
-   Ask for (or keep generic placeholders `{gcp_project_id}`, `{org_id}`, `{pool_id}`, `{provider_id}`, `{okta_domain}` if generating reusable templates):
-   - **Target Linux distro & rollout method:** RHEL 8/9/10, Rocky, AlmaLinux, or Fedora via `dnf` / `yum`
-   - **Authentication pattern:**
-     - **Standard Google Cloud / Gemini Enterprise OAuth** (no external WIF)
-     - **Okta + WIF Pattern A (Recommended):** 4-line `gcp` block in `settings.json` + native `agy` browser WIF sign-in (zero `gcloud` dependency)
-     - **Okta + WIF Pattern B:** Zero-paste `wif-okta-login-config.json` + `gcloud auth application-default login` + `AGY_ADC_AUTH="true"` / `enableAdc: true`
-   - **Optional root policy lock (`admin_settings.json`):** Needed (`INCLUDE_ADMIN_SETTINGS=1`) vs. omitted (`INCLUDE_ADMIN_SETTINGS=0`, default).
+1. **Default Action — Build or Customize the Portable `.zip` Bundle:**
+   - Edit or generate `settings.json` from the [CLI settings template](assets/configs/agy-cli-settings.json) with the target Google Cloud `project` and `location`.
+   - Run the default [portable ZIP bundle builder](scripts/build-bundle.sh) (`./scripts/build-bundle.sh`), which downloads and SHA-512 verifies `agy`, bundles the JSON settings files + standalone `install.sh`, and outputs `dist/antigravity-enterprise-bundle-linux-<arch>.zip`:
+     ```bash
+     # Default portable .zip (agy binary + settings.json + install.sh; ready for Ping or Okta Pattern A WIF)
+     ./scripts/build-bundle.sh
 
-2. **Load Only the Required Reference Module(s) & Bundled Templates:**
-   - **Native Red Hat RPM Packaging, Spec, Wrapper & TLS/Proxy Setup:** Read the [RHEL RPM packaging guide](references/rhel-rpm-packaging.md) and reuse the [RPM build script](scripts/build-rpm.sh), [RPM spec template](assets/google-antigravity-config.spec), [CLI settings template](assets/configs/agy-cli-settings.json), and optional [admin policy template](assets/configs/admin_settings.json).
-   - **Okta (OIDC or SAML 2.0) + Workforce Identity Federation & IAM Setup:** Read the [Okta and WIF authentication guide](references/okta-wif-authentication.md) alongside the optional Pattern B [Okta WIF login config example](assets/configs/wif-okta-login-config.example.json) and [desktop ADC config template](assets/configs/user_app_config.json).
+     # Optional Pattern B WIF + ADC .zip (adds wif-login-config.json + config.json + AGY_ADC_AUTH="true")
+     INCLUDE_WIF_ADC=1 GCP_QUOTA_PROJECT="example-gcp-project" ./scripts/build-bundle.sh
 
-3. **Verify Output Before Delivery:**
-   - Validate all generated JSON files with `python3 -m json.tool <file.json>`.
-   - Confirm zero unknown keys are placed in `admin_settings.json` (only `caCertPath`, `proxy`, `gateway`, `models`, `agentControls`, `browserControls`, `mcpControls`, `featureControls`).
-   - Confirm `AGY_CLI_DISABLE_AUTO_UPDATE="true"` uses literal lowercase `"true"` in any system-managed package or profile script.
-   - Verify no hardcoded customer secrets, OAuth client secrets, or personal credentials appear in any generated config or RPM spec (`wif-okta-login-config.json` contains only public pool/provider URIs, never client secrets).
+     # Optional system admin policy .zip (also bundles admin_settings.json for sudo ./install.sh --system)
+     INCLUDE_ADMIN_SETTINGS=1 ./scripts/build-bundle.sh
+     ```
+2. **Workforce Identity Federation (Ping Identity or Okta):**
+   - Read the [Ping Identity and Okta WIF authentication guide](references/wif-authentication.md) for side-by-side **PingFederate**, **PingOne / PingOne AIC**, and **Okta** (OIDC & SAML 2.0) Workforce Pool commands, IAM `principalSet` bindings, firewall allowlists, and Pattern B templates ([WIF login config example](assets/configs/wif-login-config.example.json) and [desktop ADC config template](assets/configs/user_app_config.json)).
+3. **Optional Native OS Package (`.rpm` via `dnf` / `rpmbuild`):**
+   - Only when the user requests an `.rpm` instead of the default `.zip`, read the [optional RHEL RPM packaging guide](references/rhel-rpm-packaging.md) and use the [optional RPM build script](scripts/build-rpm.sh), [RPM spec template](assets/google-antigravity-config.spec), and optional [admin policy template](assets/configs/admin_settings.json).
+4. **Verify Output Before Delivery:**
+   - Validate every generated `.json` file with `python3 -m json.tool <file.json>`.
+   - Verify the `.zip` archive listing (`unzip -l dist/*.zip` or `python3 -m zipfile -l dist/*.zip`) contains `install.sh`, `bin/agy-bin`, and `configs/settings.json`.
+   - Confirm `AGY_CLI_DISABLE_AUTO_UPDATE="true"` uses literal lowercase `"true"` and zero private credentials or client secrets appear in any bundled file.
 
 ## Public Documentation References
 
 - **Antigravity in the Enterprise (Licensing, WIF & ADC):** https://antigravity.google/docs/enterprise
 - **Antigravity CLI Install, Reference & Settings:** https://antigravity.google/docs/cli/install · https://antigravity.google/docs/cli/reference · https://antigravity.google/docs/settings · https://antigravity.google/docs/permissions
-- **Enterprise Gateway & Linux `/etc/antigravity/admin_settings.json` Precedence:** https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools/deploy-enterprise-gateway#deploy-mdm
-- **AI Developer Tools Settings & Public Sector Compliance (`AGY_CLI_DISABLE_AUTO_UPDATE`):** https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools-settings · https://docs.cloud.google.com/docs/security/compliance/deploy-antigravity-us-public-sector
+- **Workforce Identity Federation with PingFederate & PingOne AIC:** https://docs.cloud.google.com/iam/docs/workforce-federation-pingfederate · https://docs.cloud.google.com/iam/docs/workforce-federation-pingone-aic · https://docs.cloud.google.com/iam/docs/workforce-federation-oidc-saml
 - **Workforce Identity Federation with Okta & `create-login-config`:** https://docs.cloud.google.com/iam/docs/workforce-sign-in-okta · https://docs.cloud.google.com/iam/docs/configuring-workforce-identity-federation · https://docs.cloud.google.com/sdk/gcloud/reference/iam/workforce-pools/create-login-config
+- **Enterprise Gateway & Linux `/etc/antigravity/admin_settings.json` Precedence:** https://docs.cloud.google.com/gemini/enterprise/docs/ai-developer-tools/deploy-enterprise-gateway#deploy-mdm · https://docs.cloud.google.com/docs/security/compliance/deploy-antigravity-us-public-sector

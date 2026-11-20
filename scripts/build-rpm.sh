@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Builds google-antigravity-config-<version>-<release>.rpm for RHEL / Rocky / AlmaLinux / Fedora
+# Optional Exporter: Builds google-antigravity-config-<version>-<release>.rpm for RHEL / Rocky / AlmaLinux / Fedora
+# (Note: For the default portable .zip bundle, run ./scripts/build-bundle.sh instead.)
 #
 # Usage:
-#   ./scripts/build-rpm.sh                                      # Default: agy + settings.json (Pattern A WIF ready, no MDM)
-#   INCLUDE_OKTA_WIF_ADC=1 ./scripts/build-rpm.sh               # Pattern B: also bundles wif-okta-login-config.json + AGY_ADC_AUTH=true
+#   ./scripts/build-rpm.sh                                      # Base RPM: agy + settings.json (Ping/Okta Pattern A WIF ready)
+#   INCLUDE_WIF_ADC=1 ./scripts/build-rpm.sh                    # Pattern B: also bundles wif-login-config.json + AGY_ADC_AUTH=true
 #   INCLUDE_ADMIN_SETTINGS=1 ./scripts/build-rpm.sh             # Optional: also builds google-antigravity-admin-policy subpackage
 #   BUNDLE_AGY_BINARY=0 ./scripts/build-rpm.sh                  # Config-only noarch RPM
 set -euo pipefail
@@ -17,7 +18,7 @@ PKG_VERSION="${PKG_VERSION:-1.0.0}"
 PKG_RELEASE="${PKG_RELEASE:-1}"
 BUNDLE_AGY_BINARY="${BUNDLE_AGY_BINARY:-1}"
 INCLUDE_ADMIN_SETTINGS="${INCLUDE_ADMIN_SETTINGS:-0}"
-INCLUDE_OKTA_WIF_ADC="${INCLUDE_OKTA_WIF_ADC:-0}"
+INCLUDE_WIF_ADC="${INCLUDE_WIF_ADC:-${INCLUDE_OKTA_WIF_ADC:-0}}"
 GCP_QUOTA_PROJECT="${GCP_QUOTA_PROJECT:-}"
 MANIFEST_BASE_URL="https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"
 
@@ -39,28 +40,25 @@ mkdir -p \
   "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli" \
   "$STAGE_ROOT/usr/share/google-antigravity-config"
 
-# 1. Stage user CLI JSON configuration (always included in base RPM)
 install -m 0644 "$CONFIGS_DIR/agy-cli-settings.json" \
   "$STAGE_ROOT/usr/share/google-antigravity-config/agy-cli-settings.json"
 install -m 0600 "$CONFIGS_DIR/agy-cli-settings.json" \
   "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli/settings.json"
 
-# 1b. Optionally stage Pattern B Okta WIF login-config.json + Desktop/IDE enableAdc config
-if [ "$INCLUDE_OKTA_WIF_ADC" = "1" ]; then
-  WIF_LOGIN_SRC="${WIF_LOGIN_CONFIG_FILE:-$CONFIGS_DIR/wif-okta-login-config.example.json}"
+if [ "$INCLUDE_WIF_ADC" = "1" ]; then
+  WIF_LOGIN_SRC="${WIF_LOGIN_CONFIG_FILE:-$CONFIGS_DIR/wif-login-config.example.json}"
   if [ ! -f "$WIF_LOGIN_SRC" ]; then
-    echo "[ERROR] INCLUDE_OKTA_WIF_ADC=1 requires $WIF_LOGIN_SRC" >&2
+    echo "[ERROR] INCLUDE_WIF_ADC=1 requires $WIF_LOGIN_SRC" >&2
     exit 1
   fi
   mkdir -p "$STAGE_ROOT/etc/antigravity" "$STAGE_ROOT/etc/skel/.gemini/config"
-  install -m 0644 "$WIF_LOGIN_SRC" "$STAGE_ROOT/etc/antigravity/wif-okta-login-config.json"
+  install -m 0644 "$WIF_LOGIN_SRC" "$STAGE_ROOT/etc/antigravity/wif-login-config.json"
   install -m 0644 "$CONFIGS_DIR/user_app_config.json" \
     "$STAGE_ROOT/usr/share/google-antigravity-config/user_app_config.json"
   install -m 0600 "$CONFIGS_DIR/user_app_config.json" \
     "$STAGE_ROOT/etc/skel/.gemini/config/config.json"
 fi
 
-# 1c. Optionally stage /etc/antigravity/admin_settings.json for the admin-policy subpackage
 if [ "$INCLUDE_ADMIN_SETTINGS" = "1" ]; then
   if [ ! -f "$CONFIGS_DIR/admin_settings.json" ]; then
     echo "[ERROR] INCLUDE_ADMIN_SETTINGS=1 requires $CONFIGS_DIR/admin_settings.json" >&2
@@ -71,17 +69,16 @@ if [ "$INCLUDE_ADMIN_SETTINGS" = "1" ]; then
     "$STAGE_ROOT/etc/antigravity/admin_settings.json"
 fi
 
-# 2. Generate /etc/profile.d/google-antigravity-seed.sh
 {
   echo '# Managed by google-antigravity-config RPM'
   echo 'export AGY_CLI_DISABLE_AUTO_UPDATE="true"'
   if [ -n "$GCP_QUOTA_PROJECT" ]; then
     printf 'export GOOGLE_CLOUD_QUOTA_PROJECT="%s"\n' "$GCP_QUOTA_PROJECT"
   fi
-  if [ "$INCLUDE_OKTA_WIF_ADC" = "1" ]; then
+  if [ "$INCLUDE_WIF_ADC" = "1" ]; then
     echo 'export AGY_ADC_AUTH="true"'
-    echo 'if [ -r "/etc/antigravity/wif-okta-login-config.json" ]; then'
-    echo '  export CLOUDSDK_AUTH_LOGIN_CONFIG_FILE="/etc/antigravity/wif-okta-login-config.json"'
+    echo 'if [ -r "/etc/antigravity/wif-login-config.json" ]; then'
+    echo '  export CLOUDSDK_AUTH_LOGIN_CONFIG_FILE="/etc/antigravity/wif-login-config.json"'
     echo 'fi'
   fi
   cat << 'EOF'
@@ -103,7 +100,6 @@ EOF
 } > "$STAGE_ROOT/etc/profile.d/google-antigravity-seed.sh"
 chmod 0644 "$STAGE_ROOT/etc/profile.d/google-antigravity-seed.sh"
 
-# 3. Optionally download, SHA-512 verify, and stage the Antigravity CLI binary + SSH-safe wrapper
 if [ "$BUNDLE_AGY_BINARY" = "1" ]; then
   case "$(uname -m)" in
     x86_64|amd64) arch="amd64" ;;
@@ -154,8 +150,9 @@ EOF
     if [ -n "$GCP_QUOTA_PROJECT" ]; then
       printf 'export GOOGLE_CLOUD_QUOTA_PROJECT="${GOOGLE_CLOUD_QUOTA_PROJECT:-%s}"\n' "$GCP_QUOTA_PROJECT"
     fi
-    if [ "$INCLUDE_OKTA_WIF_ADC" = "1" ]; then
+    if [ "$INCLUDE_WIF_ADC" = "1" ]; then
       echo 'export AGY_ADC_AUTH="${AGY_ADC_AUTH:-true}"'
+      echo 'export CLOUDSDK_AUTH_LOGIN_CONFIG_FILE="${CLOUDSDK_AUTH_LOGIN_CONFIG_FILE:-/etc/antigravity/wif-login-config.json}"'
     fi
     cat << 'EOF'
 
@@ -177,7 +174,6 @@ EOF
   fi
 fi
 
-# 4. Create SOURCE0 archive and build RPM(s)
 tar -czf "$RPM_TOPDIR/SOURCES/rootfs.tar.gz" -C "$STAGE_ROOT" .
 cp "$ASSETS_DIR/google-antigravity-config.spec" "$RPM_TOPDIR/SPECS/"
 
@@ -188,7 +184,7 @@ rpmbuild -bb \
   --define "pkg_release $PKG_RELEASE" \
   --define "bundle_agy $BUNDLE_AGY_BINARY" \
   --define "with_admin_policy $INCLUDE_ADMIN_SETTINGS" \
-  --define "with_okta_wif_adc $INCLUDE_OKTA_WIF_ADC" \
+  --define "with_wif_adc $INCLUDE_WIF_ADC" \
   "$RPM_TOPDIR/SPECS/google-antigravity-config.spec"
 
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/dist}"

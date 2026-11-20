@@ -11,7 +11,7 @@
 Name:           google-antigravity-config
 Version:        %{pkg_version}
 Release:        %{pkg_release}%{?dist}
-Summary:        Native Red Hat RPM installer and CLI settings for Google Antigravity (agy)
+Summary:        Optional Red Hat RPM installer and CLI settings for Google Antigravity (agy)
 License:        Apache-2.0
 URL:            https://antigravity.google
 BuildArch:      %{pkg_arch}
@@ -20,7 +20,7 @@ Requires:       coreutils
 %description
 Installs Google Antigravity CLI (agy), populates /etc/skel/.gemini/antigravity-cli/settings.json
 for new local accounts, and idempotently seeds ~/.gemini/antigravity-cli/settings.json
-for existing and SSO/LDAP/Okta WIF users via native Red Hat package management (no MDM required).
+for existing and SSO/LDAP/Ping/Okta WIF users via native Red Hat package management (no MDM required).
 
 %if 0%{?with_admin_policy}
 %package admin-policy
@@ -56,12 +56,12 @@ tar -xzf %{SOURCE0} -C %{buildroot}
 
 %attr(0644,root,root) /etc/profile.d/google-antigravity-seed.sh
 
-%if 0%{?with_okta_wif_adc}
+%if 0%{?with_wif_adc}
 %attr(0644,root,root) /usr/share/google-antigravity-config/user_app_config.json
 %dir %attr(0700,root,root) /etc/skel/.gemini/config
 %config(noreplace) %attr(0600,root,root) /etc/skel/.gemini/config/config.json
 %dir %attr(0755,root,root) /etc/antigravity
-%config(noreplace) %attr(0644,root,root) /etc/antigravity/wif-okta-login-config.json
+%config(noreplace) %attr(0644,root,root) /etc/antigravity/wif-login-config.json
 %endif
 
 %if 0%{?bundle_agy}
@@ -78,5 +78,5 @@ tar -xzf %{SOURCE0} -C %{buildroot}
 %endif
 
 %changelog
-* Tue Nov 17 2026 Platform Engineering <noreply@example.com> - 1.0.0-1
-- Native Red Hat RPM packaging for Google Antigravity (agy) with optional Okta WIF ADC and admin-policy support
+* Fri Nov 20 2026 Platform Engineering <noreply@example.com> - 1.1.0-1
+- Support Ping Identity and Okta WIF ADC login config alongside optional admin-policy subpackage
