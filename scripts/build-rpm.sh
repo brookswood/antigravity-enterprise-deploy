@@ -3,7 +3,8 @@
 # (Note: For the default portable .zip bundle, run ./scripts/build-bundle.sh instead.)
 #
 # Usage:
-#   ./scripts/build-rpm.sh                                      # Base RPM: agy + settings.json (Ping/Okta Pattern A WIF ready)
+#   WIF_PROVIDER="locations/global/workforcePools/example-pool/providers/ping-sso" ./scripts/build-rpm.sh
+#   ./scripts/build-rpm.sh                                      # Base RPM: agy + settings.json
 #   INCLUDE_WIF_ADC=1 ./scripts/build-rpm.sh                    # Pattern B: also bundles wif-login-config.json + AGY_ADC_AUTH=true
 #   INCLUDE_ADMIN_SETTINGS=1 ./scripts/build-rpm.sh             # Optional: also builds google-antigravity-admin-policy subpackage
 #   BUNDLE_AGY_BINARY=0 ./scripts/build-rpm.sh                  # Config-only noarch RPM
@@ -17,14 +18,15 @@ CONFIGS_DIR="${CONFIGS_DIR:-$ASSETS_DIR/configs}"
 PKG_VERSION="${PKG_VERSION:-1.0.0}"
 PKG_RELEASE="${PKG_RELEASE:-1}"
 BUNDLE_AGY_BINARY="${BUNDLE_AGY_BINARY:-1}"
+WIF_PROVIDER="${WIF_PROVIDER:-}"
 INCLUDE_ADMIN_SETTINGS="${INCLUDE_ADMIN_SETTINGS:-0}"
 INCLUDE_WIF_ADC="${INCLUDE_WIF_ADC:-${INCLUDE_OKTA_WIF_ADC:-0}}"
 GCP_QUOTA_PROJECT="${GCP_QUOTA_PROJECT:-}"
 MANIFEST_BASE_URL="https://antigravity-cli-auto-updater-974169037036.us-central1.run.app"
 
-for cmd in rpmbuild tar sha512sum curl sed; do
+for cmd in rpmbuild tar sha512sum curl sed python3; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
-    echo "[ERROR] Missing '$cmd'. Install prerequisites: sudo dnf install -y rpm-build curl tar coreutils" >&2
+    echo "[ERROR] Missing '$cmd'. Install prerequisites: sudo dnf install -y rpm-build curl tar coreutils python3" >&2
     exit 1
   fi
 done
@@ -44,6 +46,34 @@ install -m 0644 "$CONFIGS_DIR/agy-cli-settings.json" \
   "$STAGE_ROOT/usr/share/google-antigravity-config/agy-cli-settings.json"
 install -m 0600 "$CONFIGS_DIR/agy-cli-settings.json" \
   "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli/settings.json"
+
+HAS_WIF_SEED="0"
+if [ -n "$WIF_PROVIDER" ]; then
+  HAS_WIF_SEED="1"
+  mkdir -p "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli/cache"
+  python3 - "$WIF_PROVIDER" "$STAGE_ROOT/usr/share/google-antigravity-config/wif-provider-seed.json" "$STAGE_ROOT/usr/share/google-antigravity-config/onboarding.json" << 'EOF_WIF'
+import json, re, sys
+
+provider, seed_path, onboard_path = sys.argv[1].strip(), sys.argv[2], sys.argv[3]
+provider = re.sub(r"^//iam\.googleapis\.com/", "", provider)
+if not re.match(r"^locations/[^/]+/workforcePools/[^/]+/providers/[^/]+$", provider):
+  raise SystemExit(
+      f"[ERROR] WIF_PROVIDER must match 'locations/<loc>/workforcePools/<pool>/providers/<provider>', got: {provider}"
+  )
+with open(seed_path, "w", encoding="utf-8") as f:
+  json.dump({"saved_wif_provider": provider}, f, indent=2)
+  f.write("\n")
+with open(onboard_path, "w", encoding="utf-8") as f:
+  json.dump({"previousAuthMethod": "wif"}, f, indent=2)
+  f.write("\n")
+EOF_WIF
+  chmod 0644 "$STAGE_ROOT/usr/share/google-antigravity-config/wif-provider-seed.json" \
+    "$STAGE_ROOT/usr/share/google-antigravity-config/onboarding.json"
+  install -m 0600 "$STAGE_ROOT/usr/share/google-antigravity-config/wif-provider-seed.json" \
+    "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli/antigravity-oauth-token"
+  install -m 0600 "$STAGE_ROOT/usr/share/google-antigravity-config/onboarding.json" \
+    "$STAGE_ROOT/etc/skel/.gemini/antigravity-cli/cache/onboarding.json"
+fi
 
 if [ "$INCLUDE_WIF_ADC" = "1" ]; then
   WIF_LOGIN_SRC="${WIF_LOGIN_CONFIG_FILE:-$CONFIGS_DIR/wif-login-config.example.json}"
@@ -84,17 +114,24 @@ fi
   cat << 'EOF'
 
 if [ -n "${HOME:-}" ] && [ "$(id -u 2>/dev/null || echo 0)" -ge 1000 ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then
-  _tpl="/usr/share/google-antigravity-config/agy-cli-settings.json"
-  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_tpl" ]; then
+  _share="/usr/share/google-antigravity-config"
+  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_share/agy-cli-settings.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
-    install -m 0600 "$_tpl" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
+    install -m 0600 "$_share/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
   fi
-  _app_tpl="/usr/share/google-antigravity-config/user_app_config.json"
-  if [ -f "$_app_tpl" ] && [ ! -f "$HOME/.gemini/config/config.json" ]; then
+  if [ ! -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && [ -f "$_share/wif-provider-seed.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+    install -m 0600 "$_share/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" 2>/dev/null || true
+  fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/cache/onboarding.json" ] && [ -f "$_share/onboarding.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli/cache" 2>/dev/null || true
+    install -m 0600 "$_share/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json" 2>/dev/null || true
+  fi
+  if [ -f "$_share/user_app_config.json" ] && [ ! -f "$HOME/.gemini/config/config.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/config" 2>/dev/null || true
-    install -m 0600 "$_app_tpl" "$HOME/.gemini/config/config.json" 2>/dev/null || true
+    install -m 0600 "$_share/user_app_config.json" "$HOME/.gemini/config/config.json" 2>/dev/null || true
   fi
-  unset _tpl _app_tpl
+  unset _share
 fi
 EOF
 } > "$STAGE_ROOT/etc/profile.d/google-antigravity-seed.sh"
@@ -157,11 +194,20 @@ EOF
     cat << 'EOF'
 
 if [ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then
-  _tpl="/usr/share/google-antigravity-config/agy-cli-settings.json"
-  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_tpl" ]; then
+  _share="/usr/share/google-antigravity-config"
+  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_share/agy-cli-settings.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
-    install -m 0600 "$_tpl" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
+    install -m 0600 "$_share/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
   fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && [ -f "$_share/wif-provider-seed.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+    install -m 0600 "$_share/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" 2>/dev/null || true
+  fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/cache/onboarding.json" ] && [ -f "$_share/onboarding.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli/cache" 2>/dev/null || true
+    install -m 0600 "$_share/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json" 2>/dev/null || true
+  fi
+  unset _share
 fi
 
 exec /opt/google/antigravity-cli/agy-bin "$@"
@@ -183,6 +229,7 @@ rpmbuild -bb \
   --define "pkg_version $PKG_VERSION" \
   --define "pkg_release $PKG_RELEASE" \
   --define "bundle_agy $BUNDLE_AGY_BINARY" \
+  --define "with_wif_seed $HAS_WIF_SEED" \
   --define "with_admin_policy $INCLUDE_ADMIN_SETTINGS" \
   --define "with_wif_adc $INCLUDE_WIF_ADC" \
   "$RPM_TOPDIR/SPECS/google-antigravity-config.spec"

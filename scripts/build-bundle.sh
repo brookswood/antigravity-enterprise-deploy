@@ -1,15 +1,24 @@
 #!/usr/bin/env bash
 # Default Exporter: Builds a portable .zip installer bundle containing:
-#   - bin/agy-bin            (SHA-512 verified Google Antigravity CLI binary)
-#   - configs/settings.json  (seeded to ~/.gemini/antigravity-cli/settings.json)
-#   - configs/*              (optional WIF ADC login-config.json / config.json / admin_settings.json)
-#   - install.sh             (one-step bash installer: user-local default, or `sudo ./install.sh --system`)
+#   - bin/agy-bin                   (SHA-512 verified Google Antigravity CLI binary)
+#   - configs/settings.json         (seeded to ~/.gemini/antigravity-cli/settings.json)
+#   - configs/onboarding.json       (when WIF_PROVIDER is set: enables 1-step "Continue with <idp>" prompt)
+#   - configs/wif-provider-seed.json(when WIF_PROVIDER is set: pre-seeds Ping or Okta WIF provider - zero typing, zero gcloud)
+#   - configs/*                     (optional Pattern B ADC files or optional admin_settings.json)
+#   - install.sh                    (one-step bash installer: user-local default, or `sudo ./install.sh --system`)
 #
 # Usage:
-#   ./scripts/build-bundle.sh                                                  # Default .zip (Pattern A Ping/Okta WIF ready)
+#   # Recommended 1-step Ping or Okta WIF .zip (zero gcloud CLI, zero manual provider typing):
+#   WIF_PROVIDER="locations/global/workforcePools/example-pool/providers/ping-sso" ./scripts/build-bundle.sh
+#
+#   # Standard Google Cloud OAuth .zip (no external WIF):
+#   ./scripts/build-bundle.sh
+#
+#   # Optional Pattern B WIF + gcloud ADC .zip:
 #   INCLUDE_WIF_ADC=1 GCP_QUOTA_PROJECT="example-gcp-project" ./scripts/build-bundle.sh
-#   INCLUDE_ADMIN_SETTINGS=1 ./scripts/build-bundle.sh                         # Also bundles optional admin_settings.json
-#   TARGET_ARCH=arm64 ./scripts/build-bundle.sh                                # Cross-package linux_arm64 on an amd64 host
+#
+#   # Optional system admin policy .zip:
+#   INCLUDE_ADMIN_SETTINGS=1 ./scripts/build-bundle.sh
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,6 +27,7 @@ ASSETS_DIR="${ASSETS_DIR:-$ROOT_DIR/assets}"
 CONFIGS_DIR="${CONFIGS_DIR:-$ASSETS_DIR/configs}"
 
 BUNDLE_AGY_BINARY="${BUNDLE_AGY_BINARY:-1}"
+WIF_PROVIDER="${WIF_PROVIDER:-}"
 INCLUDE_WIF_ADC="${INCLUDE_WIF_ADC:-0}"
 INCLUDE_ADMIN_SETTINGS="${INCLUDE_ADMIN_SETTINGS:-0}"
 GCP_QUOTA_PROJECT="${GCP_QUOTA_PROJECT:-}"
@@ -50,6 +60,28 @@ mkdir -p "$BUNDLE_ROOT/bin" "$BUNDLE_ROOT/configs"
 # 1. Stage JSON configuration files
 install -m 0644 "$CONFIGS_DIR/agy-cli-settings.json" "$BUNDLE_ROOT/configs/settings.json"
 
+# 1a. Pre-seed 1-step WIF fast sign-in ("Continue with <provider>") when WIF_PROVIDER is specified (no gcloud required)
+if [ -n "$WIF_PROVIDER" ]; then
+  python3 - "$WIF_PROVIDER" "$BUNDLE_ROOT/configs/wif-provider-seed.json" "$BUNDLE_ROOT/configs/onboarding.json" << 'EOF_WIF'
+import json, re, sys
+
+provider, seed_path, onboard_path = sys.argv[1].strip(), sys.argv[2], sys.argv[3]
+provider = re.sub(r"^//iam\.googleapis\.com/", "", provider)
+if not re.match(r"^locations/[^/]+/workforcePools/[^/]+/providers/[^/]+$", provider):
+  raise SystemExit(
+      f"[ERROR] WIF_PROVIDER must match 'locations/<loc>/workforcePools/<pool>/providers/<provider>', got: {provider}"
+  )
+with open(seed_path, "w", encoding="utf-8") as f:
+  json.dump({"saved_wif_provider": provider}, f, indent=2)
+  f.write("\n")
+with open(onboard_path, "w", encoding="utf-8") as f:
+  json.dump({"previousAuthMethod": "wif"}, f, indent=2)
+  f.write("\n")
+EOF_WIF
+  chmod 0644 "$BUNDLE_ROOT/configs/wif-provider-seed.json" "$BUNDLE_ROOT/configs/onboarding.json"
+fi
+
+# 1b. Optional Pattern B (gcloud ADC mode)
 if [ "$INCLUDE_WIF_ADC" = "1" ]; then
   WIF_LOGIN_SRC="${WIF_LOGIN_CONFIG_FILE:-$CONFIGS_DIR/wif-login-config.example.json}"
   if [ ! -f "$WIF_LOGIN_SRC" ]; then
@@ -60,6 +92,7 @@ if [ "$INCLUDE_WIF_ADC" = "1" ]; then
   install -m 0644 "$CONFIGS_DIR/user_app_config.json" "$BUNDLE_ROOT/configs/config.json"
 fi
 
+# 1c. Optional system admin_settings.json
 if [ "$INCLUDE_ADMIN_SETTINGS" = "1" ]; then
   if [ ! -f "$CONFIGS_DIR/admin_settings.json" ]; then
     echo "[ERROR] INCLUDE_ADMIN_SETTINGS=1 requires $CONFIGS_DIR/admin_settings.json" >&2
@@ -104,7 +137,7 @@ cat << 'EOF_HEADER' > "$BUNDLE_ROOT/install.sh"
 # Standalone Google Antigravity (agy) Enterprise Bundle Installer
 #
 # Modes:
-#   ./install.sh                  # Default user-local install (~/.local/bin/agy + ~/.gemini/antigravity-cli/settings.json)
+#   ./install.sh                  # Default user-local install (~/.local/bin/agy + ~/.gemini/antigravity-cli/)
 #   ./install.sh --force-config   # Overwrite existing user settings.json / config.json
 #   sudo ./install.sh --system    # System-wide install (/opt/google/antigravity-cli + /usr/bin/agy + /etc/profile.d/)
 set -euo pipefail
@@ -134,6 +167,11 @@ for arg in "$@"; do
   esac
 done
 
+HAS_WIF_SEED="0"
+if [ -f "$BUNDLE_DIR/configs/wif-provider-seed.json" ] && [ -f "$BUNDLE_DIR/configs/onboarding.json" ]; then
+  HAS_WIF_SEED="1"
+fi
+
 HAS_WIF_ADC="0"
 if [ -f "$BUNDLE_DIR/configs/wif-login-config.json" ]; then
   HAS_WIF_ADC="1"
@@ -151,19 +189,37 @@ copy_user_cfg() {
   fi
 }
 
+# Never overwrite an existing token file even under --force-config so active sessions stay intact
+seed_if_absent() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p -m 0700 "$(dirname "$dst")"
+  if [ ! -f "$dst" ]; then
+    install -m 0600 "$src" "$dst"
+    echo "Pre-seeded WIF login state: $dst"
+  fi
+}
+
 if [ "$MODE" = "user" ]; then
   BIN_DIR="${AGY_INSTALL_DIR:-$HOME/.local/bin}"
   SHARE_DIR="$HOME/.local/share/google-antigravity-config"
-  mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" "$SHARE_DIR"
+  mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" "$HOME/.gemini/antigravity-cli/cache" "$SHARE_DIR"
   mkdir -p "$BIN_DIR"
 
   install -m 0600 "$BUNDLE_DIR/configs/settings.json" "$SHARE_DIR/settings.json"
   copy_user_cfg "$BUNDLE_DIR/configs/settings.json" "$HOME/.gemini/antigravity-cli/settings.json"
 
+  if [ "$HAS_WIF_SEED" = "1" ]; then
+    install -m 0600 "$BUNDLE_DIR/configs/wif-provider-seed.json" "$SHARE_DIR/wif-provider-seed.json"
+    install -m 0600 "$BUNDLE_DIR/configs/onboarding.json" "$SHARE_DIR/onboarding.json"
+    seed_if_absent "$BUNDLE_DIR/configs/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+    seed_if_absent "$BUNDLE_DIR/configs/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json"
+  fi
+
   if [ "$HAS_WIF_ADC" = "1" ]; then
     mkdir -p -m 0700 "$HOME/.config/antigravity" "$HOME/.gemini/config"
     install -m 0600 "$BUNDLE_DIR/configs/wif-login-config.json" "$HOME/.config/antigravity/wif-login-config.json"
-    echo "Installed WIF login config: $HOME/.config/antigravity/wif-login-config.json"
+    echo "Installed WIF ADC login config: $HOME/.config/antigravity/wif-login-config.json"
     if [ -f "$BUNDLE_DIR/configs/config.json" ]; then
       copy_user_cfg "$BUNDLE_DIR/configs/config.json" "$HOME/.gemini/config/config.json"
     fi
@@ -183,10 +239,20 @@ if [ "$MODE" = "user" ]; then
         echo 'export CLOUDSDK_AUTH_LOGIN_CONFIG_FILE="${CLOUDSDK_AUTH_LOGIN_CONFIG_FILE:-$HOME/.config/antigravity/wif-login-config.json}"'
       fi
       cat << 'EOF_WRAP'
-if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$HOME/.local/share/google-antigravity-config/settings.json" ]; then
+_share="$HOME/.local/share/google-antigravity-config"
+if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_share/settings.json" ]; then
   mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
-  install -m 0600 "$HOME/.local/share/google-antigravity-config/settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
+  install -m 0600 "$_share/settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
 fi
+if [ ! -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && [ -f "$_share/wif-provider-seed.json" ]; then
+  mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+  install -m 0600 "$_share/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" 2>/dev/null || true
+fi
+if [ ! -f "$HOME/.gemini/antigravity-cli/cache/onboarding.json" ] && [ -f "$_share/onboarding.json" ]; then
+  mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli/cache" 2>/dev/null || true
+  install -m 0600 "$_share/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json" 2>/dev/null || true
+fi
+unset _share
 exec "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/agy-bin" "$@"
 EOF_WRAP
     } > "$BIN_DIR/agy"
@@ -194,7 +260,6 @@ EOF_WRAP
     echo "Installed binary & wrapper: $BIN_DIR/agy"
   fi
 
-  # Ensure ~/.local/bin and optional WIF env vars are present in ~/.bashrc / ~/.zshrc
   for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
     [ -f "$rc" ] || continue
     if ! grep -q "# >>> google-antigravity-bundle >>>" "$rc" 2>/dev/null; then
@@ -221,7 +286,7 @@ EOF_WRAP
     echo "       Run 'sudo ./install.sh --system' if you also want to enforce root-level admin_settings.json."
   fi
 
-  echo "Done! Open a new shell or run '$BIN_DIR/agy --version' to verify."
+  echo "Done! Run 'agy' and press Enter on 'Continue with <your-idp>' to sign in."
   exit 0
 fi
 
@@ -232,9 +297,16 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 mkdir -p -m 0755 /usr/share/google-antigravity-config /etc/profile.d
-mkdir -p -m 0700 /etc/skel/.gemini /etc/skel/.gemini/antigravity-cli
+mkdir -p -m 0700 /etc/skel/.gemini /etc/skel/.gemini/antigravity-cli /etc/skel/.gemini/antigravity-cli/cache
 install -m 0644 "$BUNDLE_DIR/configs/settings.json" /usr/share/google-antigravity-config/agy-cli-settings.json
 install -m 0600 "$BUNDLE_DIR/configs/settings.json" /etc/skel/.gemini/antigravity-cli/settings.json
+
+if [ "$HAS_WIF_SEED" = "1" ]; then
+  install -m 0644 "$BUNDLE_DIR/configs/wif-provider-seed.json" /usr/share/google-antigravity-config/wif-provider-seed.json
+  install -m 0644 "$BUNDLE_DIR/configs/onboarding.json" /usr/share/google-antigravity-config/onboarding.json
+  install -m 0600 "$BUNDLE_DIR/configs/wif-provider-seed.json" /etc/skel/.gemini/antigravity-cli/antigravity-oauth-token
+  install -m 0600 "$BUNDLE_DIR/configs/onboarding.json" /etc/skel/.gemini/antigravity-cli/cache/onboarding.json
+fi
 
 if [ "$HAS_WIF_ADC" = "1" ]; then
   mkdir -p -m 0755 /etc/antigravity
@@ -264,14 +336,24 @@ fi
   fi
   cat << 'EOF_PROF'
 if [ -n "${HOME:-}" ] && [ "$(id -u 2>/dev/null || echo 0)" -ge 1000 ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then
-  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "/usr/share/google-antigravity-config/agy-cli-settings.json" ]; then
+  _share="/usr/share/google-antigravity-config"
+  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_share/agy-cli-settings.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
-    install -m 0600 "/usr/share/google-antigravity-config/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
+    install -m 0600 "$_share/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
   fi
-  if [ -f "/usr/share/google-antigravity-config/user_app_config.json" ] && [ ! -f "$HOME/.gemini/config/config.json" ]; then
+  if [ ! -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && [ -f "$_share/wif-provider-seed.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+    install -m 0600 "$_share/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" 2>/dev/null || true
+  fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/cache/onboarding.json" ] && [ -f "$_share/onboarding.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli/cache" 2>/dev/null || true
+    install -m 0600 "$_share/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json" 2>/dev/null || true
+  fi
+  if [ -f "$_share/user_app_config.json" ] && [ ! -f "$HOME/.gemini/config/config.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/config" 2>/dev/null || true
-    install -m 0600 "/usr/share/google-antigravity-config/user_app_config.json" "$HOME/.gemini/config/config.json" 2>/dev/null || true
+    install -m 0600 "$_share/user_app_config.json" "$HOME/.gemini/config/config.json" 2>/dev/null || true
   fi
+  unset _share
 fi
 EOF_PROF
 } > /etc/profile.d/google-antigravity-seed.sh
@@ -293,10 +375,20 @@ if [ -f "$BUNDLE_DIR/bin/agy-bin" ]; then
     fi
     cat << 'EOF_SYSWRAP'
 if [ -n "${HOME:-}" ] && [ -d "$HOME" ] && [ -w "$HOME" ]; then
-  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "/usr/share/google-antigravity-config/agy-cli-settings.json" ]; then
+  _share="/usr/share/google-antigravity-config"
+  if [ ! -f "$HOME/.gemini/antigravity-cli/settings.json" ] && [ -f "$_share/agy-cli-settings.json" ]; then
     mkdir -p -m 0700 "$HOME/.gemini" "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
-    install -m 0600 "/usr/share/google-antigravity-config/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
+    install -m 0600 "$_share/agy-cli-settings.json" "$HOME/.gemini/antigravity-cli/settings.json" 2>/dev/null || true
   fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && [ -f "$_share/wif-provider-seed.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli" 2>/dev/null || true
+    install -m 0600 "$_share/wif-provider-seed.json" "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" 2>/dev/null || true
+  fi
+  if [ ! -f "$HOME/.gemini/antigravity-cli/cache/onboarding.json" ] && [ -f "$_share/onboarding.json" ]; then
+    mkdir -p -m 0700 "$HOME/.gemini/antigravity-cli/cache" 2>/dev/null || true
+    install -m 0600 "$_share/onboarding.json" "$HOME/.gemini/antigravity-cli/cache/onboarding.json" 2>/dev/null || true
+  fi
+  unset _share
 fi
 exec /opt/google/antigravity-cli/agy-bin "$@"
 EOF_SYSWRAP

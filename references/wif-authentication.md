@@ -4,25 +4,38 @@ Use this reference when integrating **Google Antigravity (`agy`)** with **Ping I
 
 ## 1. Workstation JSON Patterns (Identical for Both Ping Identity & Okta)
 
-Neither `~/.gemini/antigravity-cli/settings.json` nor `/etc/antigravity/admin_settings.json` accepts a custom `wifProvider`, `pingIssuer`, or `oktaIssuer` field. Both **Ping Identity** and **Okta** use the exact same two workstation JSON patterns:
+Neither `~/.gemini/antigravity-cli/settings.json` nor `/etc/antigravity/admin_settings.json` accepts a custom `wifProvider`, `pingIssuer`, or `oktaIssuer` field. Both **Ping Identity** and **Okta** use the exact same workstation patterns — and **Pattern A (`WIF_PROVIDER=...`) gives end users a 1-step redirect straight to Ping or Okta with zero `gcloud` CLI**:
 
-| Criteria | Pattern A (Recommended): Native `agy` Browser WIF | Pattern B: Pre-Provisioned `wif-login-config.json` + ADC |
+| Criteria | Pattern A (Recommended): Pre-Seeded 1-Step Native `agy` WIF | Pattern B (Optional): `wif-login-config.json` + `gcloud` ADC |
 | :--- | :--- | :--- |
-| **JSON Bundled in `.zip` (or RPM)** | **4 lines** in `settings.json` (`gcp.project` + `gcp.location`) | **4 lines** in `settings.json` + **9 lines** in `wif-login-config.json` (+ **3 lines** in `config.json` for Desktop/IDE) |
+| **JSON Bundled in `.zip` (or RPM)** | `settings.json` (`gcp.project` + `gcp.location`) + pre-seeded `onboarding.json` (`{"previousAuthMethod": "wif"}`) + `wif-provider-seed.json` (`{"saved_wif_provider": "..."}`) | `settings.json` + `wif-login-config.json` (+ `config.json` `enableAdc: true` for Desktop/IDE) |
 | **Requires `google-cloud-cli` (`gcloud`)?** | **No** | **Yes** |
-| **Build Command** | `./scripts/build-bundle.sh` *(default)* | `INCLUDE_WIF_ADC=1 GCP_QUOTA_PROJECT="example-gcp-project" ./scripts/build-bundle.sh` |
-| **First-Time Developer Flow** | Selects **Sign in with Google Cloud → Workforce Identity Federation**, enters `locations/global/workforcePools/{pool_id}/providers/{provider_id}` **once**, signs into Ping or Okta + MFA in browser; `agy` saves the WIF provider in OS Keyring across restarts and `/logout`. | Runs `gcloud auth application-default login` (reads `CLOUDSDK_AUTH_LOGIN_CONFIG_FILE` automatically, opens Ping or Okta SSO + MFA), then runs `agy` with zero auth prompts (`AGY_ADC_AUTH="true"`). |
+| **Build Command** | `WIF_PROVIDER="locations/global/workforcePools/{pool_id}/providers/{provider_id}" ./scripts/build-bundle.sh` | `INCLUDE_WIF_ADC=1 GCP_QUOTA_PROJECT="example-gcp-project" ./scripts/build-bundle.sh` |
+| **End-User Sign-In Experience (1-2 Steps)** | User runs `agy` -> presses **`Enter`** on pre-selected **`> 1. Continue with {provider_id}`** -> browser redirects immediately to **Ping or Okta SSO + MFA** (zero strings or project IDs to type!). | User runs `gcloud auth application-default login` (opens Ping or Okta SSO + MFA), then runs `agy` (`AGY_ADC_AUTH="true"`). |
 
-### Pattern A Workstation JSON (`~/.gemini/antigravity-cli/settings.json`)
+### Pattern A Pre-Seeded Workstation Files (`WIF_PROVIDER=... ./scripts/build-bundle.sh`)
 
-```json
-{
-  "gcp": {
-    "project": "example-gcp-project",
-    "location": "global"
-  }
-}
-```
+1. **`~/.gemini/antigravity-cli/settings.json`** (`0600`):
+   ```json
+   {
+     "gcp": {
+       "project": "example-gcp-project",
+       "location": "global"
+     }
+   }
+   ```
+2. **`~/.gemini/antigravity-cli/cache/onboarding.json`** (`0600`, seeded only if absent):
+   ```json
+   {
+     "previousAuthMethod": "wif"
+   }
+   ```
+3. **`~/.gemini/antigravity-cli/antigravity-oauth-token`** (`0600`, seeded only if absent so active tokens are never overwritten):
+   ```json
+   {
+     "saved_wif_provider": "locations/global/workforcePools/example-workforce-pool/providers/ping-sso"
+   }
+   ```
 
 ### Pattern B Workstation JSONs & Environment Variables
 

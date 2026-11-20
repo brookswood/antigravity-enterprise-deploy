@@ -56,6 +56,14 @@ tar -xzf %{SOURCE0} -C %{buildroot}
 
 %attr(0644,root,root) /etc/profile.d/google-antigravity-seed.sh
 
+%if 0%{?with_wif_seed}
+%attr(0644,root,root) /usr/share/google-antigravity-config/wif-provider-seed.json
+%attr(0644,root,root) /usr/share/google-antigravity-config/onboarding.json
+%dir %attr(0700,root,root) /etc/skel/.gemini/antigravity-cli/cache
+%config(noreplace) %attr(0600,root,root) /etc/skel/.gemini/antigravity-cli/antigravity-oauth-token
+%config(noreplace) %attr(0600,root,root) /etc/skel/.gemini/antigravity-cli/cache/onboarding.json
+%endif
+
 %if 0%{?with_wif_adc}
 %attr(0644,root,root) /usr/share/google-antigravity-config/user_app_config.json
 %dir %attr(0700,root,root) /etc/skel/.gemini/config
