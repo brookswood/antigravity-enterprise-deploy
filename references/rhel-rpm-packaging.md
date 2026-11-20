@@ -49,7 +49,7 @@ Only four governance blocks are exclusive to `/etc/antigravity/admin_settings.js
 `agy` automatically trusts the host Red Hat OS certificate store (`/etc/pki/ca-trust/source/anchors/` + `sudo update-ca-trust`) and standard proxy environment variables (`HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`) without needing `admin_settings.json`.
 
 ```bash
-# Optional RPM build (base RPM only — Pattern A Ping/Okta WIF ready, no admin_settings.json)
+# Optional RPM build (base RPM only - Pattern A Ping/Okta WIF ready, no admin_settings.json)
 ./scripts/build-rpm.sh
 
 # Optional RPM build with Pattern B WIF ADC + optional admin-policy subpackage
